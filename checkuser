@@ -1,5 +1,9 @@
 #!/bin/bash
 
+set -o errexit \
+    -o pipefail \
+    -o nounset
+
 # Checks the year-based ACLs to see whether a user has reapplied
 # for their RC accounts that session.
 
@@ -31,8 +35,8 @@ id "$username" >/dev/null 2>/dev/null && echo "${GREEN}yes${RESET}" || echo "${R
 
 
 echo -n "User is in groups: "
-user_groups="$(groups "$username" 2>&1)"
-if [ $? == 0 ]; then
+if user_groups="$(groups "$username" 2>&1)"
+then
     echo "${GREEN}${user_groups#*:}${RESET}"
 else
     echo "${RED}${user_groups#groups: *:}${RESET}"
@@ -40,33 +44,76 @@ fi
 
 echo "" # Blank line for section separation
 
-declare -a sge_access_groups sge_access_group_labels
-sge_access_groups+=(AY201617)
-sge_access_group_labels+=("access group for 2016-2017")
-sge_access_groups+=(AY201718)
-sge_access_group_labels+=("access group for 2017-2018")
-sge_access_groups+=(AY201819)
-sge_access_group_labels+=("access group for 2018-2019")
-sge_access_groups+=(Open)
-sge_access_group_labels+=("Open access group")
+function sge_check_acls() {
+    local access_group
+    local access_group_label
+    local -a sge_access_groups sge_access_group_labels
 
-for (( access_group_index=0; access_group_index < "${#sge_access_groups[@]}"; access_group_index++ )); do
-    access_group="${sge_access_groups[$access_group_index]}"
-    access_group_label="${sge_access_group_labels[$access_group_index]}"
+    sge_access_groups+=(AY201617)
+    sge_access_group_labels+=("access group for 2016-2017")
+    sge_access_groups+=(AY201718)
+    sge_access_group_labels+=("access group for 2017-2018")
+    sge_access_groups+=(AY201819)
+    sge_access_group_labels+=("access group for 2018-2019")
+    sge_access_groups+=(Open)
+    sge_access_group_labels+=("Open access group")
 
-    echo -n "Checking whether user is in $access_group_label: "
-    if qconf -su "$access_group" 2>/dev/null >/dev/null; then
-        qconf -su "$access_group" | grep -q "$username"
-        if [ $? == 0 ]
-        then
-          echo "${GREEN}yes${RESET}"
+    for (( access_group_index=0; access_group_index < "${#sge_access_groups[@]}"; access_group_index++ )); do
+        access_group="${sge_access_groups[$access_group_index]}"
+        access_group_label="${sge_access_group_labels[$access_group_index]}"
+
+        echo -n "Checking whether user is in $access_group_label: "
+        if qconf -su "$access_group" 2>/dev/null >/dev/null; then
+            if qconf -su "$access_group" | grep -q "$username"
+            then
+              echo "${GREEN}yes${RESET}"
+            else
+              echo "${RED}no${RESET}"
+            fi
         else
-          echo "${RED}no${RESET}"
+            echo "${BLUE}no such group${RESET}"
+        fi
+    done
+}
+
+function sge_check_nosub() {
+    local username="$1"
+    echo -n "Checking whether user has been blocked from submitting jobs: "
+    if qconf -su NoSubmission 2>/dev/null >/dev/null
+    then
+        # check NoSubmission for blocked users
+        if qconf -su NoSubmission | grep -q "$username"
+        then
+          echo "${RED}yes${RESET}"
+        else
+          echo "${GREEN}no${RESET}"
         fi
     else
-        echo "${BLUE}no such group${RESET}"
+        echo "${GREEN}no (no blocked ACL here)${RESET}"
     fi
-done
+}
+
+function slurm_check_user_exists() {
+    local username="$1"
+    echo -n "Checking whether user is in Slurm DB: "
+    command -v jq >/dev/null || echo "${RED}could not check, jq not found${RESET}"
+    if sacctmgr --json list user "$username" \
+        | jq -er '.users[].name' >/dev/null
+    then
+        echo "${GREEN}yes${RESET}"
+    else
+        echo "${RED}no${RESET}"
+    fi
+}
+
+
+if command -v qconf >/dev/null; then
+    sge_check_acls "$username"
+    sge_check_nosub "$username"
+elif command -v sacctmgr >/dev/null; then
+    slurm_check_user_exists "$username"
+fi
+
 
 echo -n "Checking whether user is in the actual PAM userlist: "
 pam_listfile="/var/opt/sge/shared/userlist"
@@ -79,26 +126,10 @@ else
     echo "${RED}no${RESET}"
 fi
 
-echo -n "Checking whether user has been blocked from submitting jobs: "
-if qconf -su NoSubmission 2>/dev/null >/dev/null
-then
-    # check NoSubmission for blocked users
-    qconf -su NoSubmission | grep -q "$username"
-    if [ $? == 0 ]
-    then
-      echo "${RED}yes${RESET}"
-    else
-      echo "${GREEN}no${RESET}"
-    fi
-else
-    echo "${GREEN}no (no blocked ACL here)${RESET}"
-fi
-
 echo "" # Blank line for section separation
 
 echo -n "Checking whether user has a home directory: "
-stat --printf='' "/home/${username}" 2>/dev/null
-if [ $? == 0 ]
+if stat --printf='' "/home/${username}" 2>/dev/null
 then
   echo "${GREEN}yes${RESET}"
 else
@@ -106,10 +137,10 @@ else
 fi
 
 echo -n "Checking whether user has a scratch directory: "
-stat --printf='' "/scratch/scratch/${username}" 2>/dev/null
-if [ $? == 0 ]
+if stat --printf='' "/scratch/scratch/${username}" 2>/dev/null
 then
   echo "${GREEN}yes${RESET}"
+  flag_has_no_scratch=n
 else
   echo "${RED}no${RESET}"
   flag_has_no_scratch=y
@@ -126,7 +157,7 @@ fi
 
 echo -n "Checking whether scratch directory is *owned* by that user: "
 owner="$(stat --printf=%U "/scratch/scratch/${username}" 2>/dev/null)"
-if [ -z "$flag_has_no_scratch" ]; 
+if [ "$flag_has_no_scratch" == "n" ]
 then
     if [ "$owner" == "$username" ]
     then
@@ -140,7 +171,7 @@ fi
 
 echo -n "Checking whether home directory is usable by owner: "
 perms="$(stat --printf=%A "/home/${username}" 2>/dev/null)"
-if [[ "${perms:1:3}" =~ rwx ]];
+if [[ "${perms:1:3}" =~ rwx ]]
 then
     echo "${GREEN}yes${RESET}"
 else 
@@ -148,7 +179,7 @@ else
 fi
 
 echo -n "Checking whether scratch directory is usable by owner: "
-if [ -z "$flag_has_no_scratch" ];
+if [ "$flag_has_no_scratch" == "n" ]
 then
     perms="$(stat --printf=%A "/scratch/scratch/${username}" 2>/dev/null)"
     if [[ "${perms:1:3}" =~ rwx ]];
