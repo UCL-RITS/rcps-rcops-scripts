@@ -4,7 +4,7 @@ set -e
 
 export LC_ALL=C
 
-PLATFORM=""
+cluster_name="${CLUSTER_NAME:-}"
 ACL=""
 
 # Make sure we have a userid to create
@@ -15,7 +15,7 @@ then
 fi 
 
 # Check that the userid starts with a letter and is alphanumeric, 7 chars
-if echo $1 | grep -qE '^[[:lower:]][[:lower:][:digit:]]{6}$' ;
+if echo "$1" | grep -qE '^[[:lower:]][[:lower:][:digit:]]{6}$' ;
 then
     echo "Valid user string: $1" 1>&2
 else
@@ -26,8 +26,22 @@ fi
 
 
 # Work out where we are
-</opt/sge/default/common/cluster_name read -r PLATFORM || (echo "Error: could not determine cluster." >&2; exit 1)
-case "$PLATFORM" in
+if [[ -n "$cluster_name" ]]; then
+    # Allow overriding cluster_name for testing/whatever
+    echo "Warning: cluster name overridden as \"$cluster_name\"" >&2
+    cluster_name="$cluster_name"
+elif [[ -r /opt/sge/default/common/cluster_name ]]; then
+    cluster_name="$(cat /opt/sge/default/common/cluster_name)"
+elif command -v sacctmgr >/dev/null; then
+    cluster_name="$(sacctmgr -pn list cluster | cut -f 1 -d '|')"
+elif [[ -r /shared/ucl/etc/cluster_name ]]; then
+    cluster_name="$(cat /shared/ucl/etc/cluster_name)"
+else
+    echo "Error: could not find a way to determine cluster name." >&2
+    exit 1
+fi
+
+case "$cluster_name" in
     "grace")
         ACL="Open"
         ;;
@@ -45,12 +59,12 @@ case "$PLATFORM" in
         exit 1
         ;;
     *)
-        echo "Error: unknown cluster: $PLATFORM" >&2
+        echo "Error: unknown cluster: $cluster_name" >&2
         exit 1
         ;;
 esac
 
-if [[ "$PLATFORM" == "legion" ]]; then
+if [[ "$cluster_name" == "legion" ]]; then
     echo "Reminder: new accounts unassociated with existing paid projects 
           are no longer to be created on Legion (as of 2019-01-01). "
     read -r -p "Are you sure you want to create this account? Please type 'yes' if so: " response
@@ -60,7 +74,7 @@ if [[ "$PLATFORM" == "legion" ]]; then
     fi
 fi
 
-if [[ "$PLATFORM" == "grace" ]]; then
+if [[ "$cluster_name" == "grace" ]]; then
     echo "Reminder: new accounts are no longer to be created on Grace."
     read -r -p "Are you sure you want to create this account? Please type 'yes' if so: " response
     if [[ "$response" != "yes" ]]; then
@@ -70,16 +84,29 @@ if [[ "$PLATFORM" == "grace" ]]; then
 fi
 
 echo "creating account for $1"
-qconf -au "$1" "$ACL"
+if command -v qconf >/dev/null; then
+    qconf -au "$1" "$ACL"
+elif command -v sacctmgr >/dev/null; then
+    echo "Slurm user adding is not yet implemented since the details of cluster implementation have not yet been finalised."
+    echo "You'll need the sacctmgr command, probably something like this:"
+    echo ""
+    echo "  sacctmgr add user name=\"\$username\""
+    echo ""
+    echo "You'll also need at least Operator privileges on Slurm. (Or sudo access to get them.)"
+    exit 1
+else
+    echo "Error: no mechanism for adding users found." >&2
+    exit 1
+fi
 
 RECIPIENT=$1@ucl.ac.uk
 echo "Emailing user ${RECIPIENT}"
 /usr/sbin/sendmail -t<<EOF
 From: rc-support@ucl.ac.uk
 To: ${RECIPIENT}
-Subject: ${PLATFORM^} account
+Subject: ${cluster_name^} account
 
-We are happy to confirm that your account to use the Research Computing ${PLATFORM^} 
+We are happy to confirm that your account to use the Research Computing ${cluster_name^} 
 HPC cluster is now active. You should be able to log in within 5 minutes of 
 receiving this email.
 
@@ -88,7 +115,7 @@ the system.
 
 GETTING HELP 
 
-Information to help you get started in using ${PLATFORM^} is available at 
+Information to help you get started in using ${cluster_name^} is available at 
 
 https://www.rc.ucl.ac.uk/docs/
 
@@ -97,7 +124,7 @@ including a user guide covering all of our systems.
 ANNOUNCEMENTS 
 
 Emails relating to planned outages, service changes etc will be sent to the
-${PLATFORM}-users@ucl.ac.uk email list. You have been subscribed to this
+${cluster_name}-users@ucl.ac.uk email list. You have been subscribed to this
 list using the email address associated with your main UCL userid - please
 make sure that you read all notices sent to this address promptly and
 observe the requests/guidelines they contain. 
