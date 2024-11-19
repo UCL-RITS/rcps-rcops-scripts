@@ -1,0 +1,50 @@
+#!/usr/bin/env bash
+
+# Run as root to delete a user's home and scratch and all its contents.
+# TODO: option to not sort/not list contents?
+# TODO: option to not delete verbosely?
+
+set -e
+
+export LC_ALL=C
+
+# Make sure we have a userid to create
+if [ "$#" -ne "1" ];
+then
+    echo "Run \"deleteuserdata userid\" to delete this user's home and scratch" 1>&2
+    exit 1
+fi 
+
+# Check that the userid starts with a letter and is alphanumeric, 7 chars
+if echo $1 | grep -qE '^[[:lower:]][[:lower:][:digit:]]{6}$' ;
+then
+    echo "Valid user string: $1" 1>&2
+else
+    echo "Exiting: Invalid user string: $1" 1>&2
+    exit 1
+fi 
+
+home="/home/$1"
+scratch="/scratch/scratch/$1"
+
+# check that home exists, list contents with newest at bottom, prompt once and delete
+if [ -d "$home" ]
+then
+    ls -alrt "$home"
+    echo "Delete $home ?"
+    rm -Irv "$home"
+else
+    echo "No directory exists at $home"
+fi
+
+# check that scratch exists, list contents with newest at bottom, prompt once and delete
+if [ -d "$scratch" ]
+then
+    ls -alrt "$scratch"
+    echo "Delete $scratch ?"
+    rm -Irv "$scratch"
+else
+    echo "No directory exists at $scratch"
+fi
+
+
